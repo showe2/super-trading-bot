@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import https from "https";
 import http from "http";
-import { sha256OfObject, printPolicyBanner } from "../helpers/policyIntegrity";
+import { sha256OfObject, printPolicyBanner } from "../helpers/policyIntegrity.js";
 const localPath = path.join(
   process.cwd(),
   "src",

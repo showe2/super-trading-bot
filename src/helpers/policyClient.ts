@@ -3,9 +3,9 @@ import fs from "fs";
 import path from "path";
 import http from "http";
 import https from "https";
-import { deepMerge } from "./merge";
-import { sha256OfObject, printPolicyBanner } from "./policyIntegrity";
-import { validatePolicyShape } from "./policyValidator";
+import { deepMerge } from "./merge.js";
+import { sha256OfObject, printPolicyBanner } from "./policyIntegrity.js";
+import { validatePolicyShape } from "./policyValidator.js";
 
 const root = process.cwd();
 const LOCAL_POLICY_PATH = path.join(root, "src", "policy", "master_config.json");

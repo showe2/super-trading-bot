@@ -1,7 +1,7 @@
 
-import { loadConfig } from "../helpers/superConfig";
-import { Notifications } from "../notifications/bus";
-import { jupiter_sell } from "../jupiter/adapter";
+import { loadConfig } from "../helpers/superConfig.js";
+import { Notifications } from "../notifications/bus.js";
+import { jupiter_sell } from "../jupiter/adapter.js";
 export type SellReason="trailingStop"|"autoScalp"|"poolDrain"|"spamExit"|"manual";
 export async function sellWithJupiterJito(tokenMint:string, amountTokens:number, reason:SellReason){
   const cfg=loadConfig(); const range = cfg.execution?.sell?.slippageBpsByReason?.[reason]||[150,200];

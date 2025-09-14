@@ -6,6 +6,9 @@
     "superbot:dev": "node --loader ts-node/esm src/cli/superbot.ts",
     "superbot:build": "tsc -p tsconfig.json",
     "superbot:run": "node dist/cli/superbot.js",
+    "api:dev": "node --loader ts-node/esm src/cli/api-server.ts",
+    "api:build": "tsc -p tsconfig.json",
+    "api:run": "node dist/cli/api-server.js",
     "policy:check": "ts-node src/cli/policy_check.ts"
   },
   "dependencies": {

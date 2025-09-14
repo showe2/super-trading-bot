@@ -1,4 +1,4 @@
-import { loadConfig } from "../helpers/superConfig";
+import { loadConfig } from "../helpers/superConfig.js";
 import fs from "fs";
 import path from "path";
 export function isDevBlacklisted(devAddress: string): {

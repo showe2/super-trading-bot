@@ -1,8 +1,8 @@
 
 import "dotenv/config";
-import { waitAndSnipeMint } from "../trading/waitAndSnipeMint";
-import { Notifications } from "../notifications/bus";
-import { hasPoolNow, getLivePrice, getLiquidityUsd, qtyTokensAfterBuy } from "../integration/adapters";
+import { waitAndSnipeMint } from "../trading/waitAndSnipeMint.js";
+import { Notifications } from "../notifications/bus.js";
+import { hasPoolNow, getLivePrice, getLiquidityUsd, qtyTokensAfterBuy } from "../integration/adapters.js";
 
 async function main(){
   const mint = process.env.TARGET_MINT || "";

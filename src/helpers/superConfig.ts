@@ -1,3 +1,3 @@
 
-import { loadPolicy } from "./policyClient";
+import { loadPolicy } from "./policyClient.js";
 export function loadConfig(): any { return loadPolicy(); }

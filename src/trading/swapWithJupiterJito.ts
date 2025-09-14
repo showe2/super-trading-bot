@@ -1,12 +1,12 @@
 
-import { isDevBlacklisted } from "../safety/blacklist";
-import { TrailingStop } from "./trailingStop";
-import { AutoScalp } from "./autoScalp";
-import { AutoExitPattern } from "../patterns/autoExit";
-import { SpamWatcher } from "../safety/spamWatcher";
-import { Notifications } from "../notifications/bus";
-import { loadConfig } from "../helpers/superConfig";
-import { jupiter_buy } from "../jupiter/adapter";
+import { isDevBlacklisted } from "../safety/blacklist.js";
+import { TrailingStop } from "./trailingStop.js";
+import { AutoScalp } from "./autoScalp.js";
+import { AutoExitPattern } from "../patterns/autoExit.js";
+import { SpamWatcher } from "../safety/spamWatcher.js";
+import { Notifications } from "../notifications/bus.js";
+import { loadConfig } from "../helpers/superConfig.js";
+import { jupiter_buy } from "../jupiter/adapter.js";
 
 type BuyParams = {
   tokenMint: string; solAmount: number; devAddress?: string;

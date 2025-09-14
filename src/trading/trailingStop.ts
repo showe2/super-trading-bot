@@ -1,5 +1,5 @@
 
-import { loadConfig } from "../helpers/superConfig";
+import { loadConfig } from "../helpers/superConfig.js";
 export class TrailingStop {
   private peak = 0; private stop=0;
   onPrice(p:number){ const cfg=loadConfig().trading?.trailingStop; if(!cfg?.enabled) return;

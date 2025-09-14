@@ -1,5 +1,5 @@
 
-import { loadConfig } from "../helpers/superConfig";
+import { loadConfig } from "../helpers/superConfig.js";
 type Sample = { ts: number; poolDeltaPercent: number };
 export class AutoExitPattern {
   private buffer: Sample[] = [];

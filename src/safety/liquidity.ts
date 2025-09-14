@@ -1,5 +1,5 @@
 
-import { loadConfig } from "../helpers/superConfig";
+import { loadConfig } from "../helpers/superConfig.js";
 export type LiquidityBand = "low"|"medium"|"high";
 export function pickLiquidityBandUSD(lpUsd: number): LiquidityBand {
   const b = loadConfig().safety?.liquidityLimits?.bandsUsd;

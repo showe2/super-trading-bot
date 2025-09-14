@@ -1,5 +1,5 @@
 
-import { loadConfig } from "../helpers/superConfig";
+import { loadConfig } from "../helpers/superConfig.js";
 export class AutoScalp {
   private entry: number|null=null;
   setEntry(p:number){ this.entry=p; }

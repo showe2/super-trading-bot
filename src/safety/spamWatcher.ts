@@ -1,5 +1,5 @@
 
-import { loadConfig } from "../helpers/superConfig";
+import { loadConfig } from "../helpers/superConfig.js";
 export type SpamSignal = { source: "twitter"|"telegram"|"onchain"; severity: "low"|"medium"|"high"; reason: string; };
 export class SpamWatcher {
   private readonly enabled: boolean; ingestedSignals: SpamSignal[] = [];

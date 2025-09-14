@@ -1,8 +1,8 @@
-import { waitForPoolByMint } from "./waitForPool";
-import { isDevBlacklisted } from "../safety/blacklist";
-import { maxBuyForLiquidityUSD } from "../safety/liquidity";
-import { safeBuyWithGuards } from "./swapWithJupiterJito";
-import { Notifications } from "../notifications/bus";
+import { waitForPoolByMint } from "./waitForPool.js";
+import { isDevBlacklisted } from "../safety/blacklist.js";
+import { maxBuyForLiquidityUSD } from "../safety/liquidity.js";
+import { safeBuyWithGuards } from "./swapWithJupiterJito.js";
+import { Notifications } from "../notifications/bus.js";
 
 type Injects = {
   hasPoolNow: () => Promise<
