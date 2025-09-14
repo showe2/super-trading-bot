@@ -1,0 +1,339 @@
+{
+  "execution": {
+    "mintWait": {
+      "enabled": true,
+      "maxWaitSecPresets": {
+        "aggressive": 900,
+        "standard": 3600,
+        "marathon": 14400
+      },
+      "autoPresetBySocialWave": {
+        "use": true,
+        "thresholds": {
+          "m5": 3,
+          "m15": 7
+        }
+      },
+      "pollMs": 600,
+      "pollMsDynamic": {
+        "min": 300,
+        "max": 1200
+      },
+      "preEntryDoubleCheck": {
+        "minPoolAgeSec": 180,
+        "noLpReplenishWindowSec": 90
+      }
+    },
+    "dryRun": {
+      "enabled": true
+    },
+    "sell": {
+      "unwrapWSOL": true,
+      "slippageBpsByReason": {
+        "trailingStop": [
+          120,
+          150
+        ],
+        "poolDrain": [
+          200,
+          300
+        ],
+        "spamExit": [
+          150,
+          250
+        ],
+        "autoScalp": [
+          120,
+          160
+        ],
+        "manual": [
+          120,
+          180
+        ]
+      },
+      "failoverRouteTimeoutMs": 2000
+    }
+  },
+  "trading": {
+    "useJito": true,
+    "jitoFeeMode": "auto",
+    "priorityFee": {
+      "targetTimeToIncludeBlocks": 1,
+      "maxFeeLamports": 2000000
+    },
+    "slippageAuto": {
+      "enabled": true,
+      "bpsMin": 80,
+      "bpsMax": 200,
+      "windowSec": 60,
+      "shrinkSizeOnHighV": true
+    },
+    "entryPulse": {
+      "firstSol": 0.1,
+      "maxFirstSol": 0.3
+    },
+    "trailingStop": {
+      "enabled": true,
+      "percentRange": {
+        "chop": [
+          8,
+          10
+        ],
+        "earlyPump": [
+          12,
+          15
+        ]
+      },
+      "armAboveEntryPercent": 5,
+      "lagLockSec": 3,
+      "wickGuard": {
+        "enabled": true,
+        "sigma": 3,
+        "windowSec": 60
+      }
+    },
+    "autoScalp": {
+      "enabled": true,
+      "targetProfitPercent": {
+        "lowLP": 5,
+        "default": 7,
+        "highLP": 9
+      },
+      "holdConfirmSec": 2,
+      "partialExit": {
+        "min": 25,
+        "max": 50
+      },
+      "comboTrailingBump": true
+    }
+  },
+  "patterns": {
+    "autoExit": {
+      "enabled": true,
+      "sellTriggerPercent": [
+        15,
+        25
+      ],
+      "timeWindowSec": [
+        3,
+        7
+      ],
+      "minConsecutiveSamples": 2,
+      "routePreference": "lowestSlippageOnDrain"
+    }
+  },
+  "safety": {
+    "spamWatcher": true,
+    "spamThresholds": {
+      "severityHigh": {
+        "m5": 3,
+        "m15": 7,
+        "buySpamKeywords": true
+      },
+      "antiBot": {
+        "maxNameChanges": 2,
+        "dedupByTextHash": true
+      },
+      "celebOverride": {
+        "enabled": true,
+        "autoTrade": false
+      }
+    },
+    "liquidityLimits": {
+      "bandsUsd": {
+        "low": {
+          "lpMaxUsd": 1000,
+          "maxBuySol": 0.1
+        },
+        "medium": {
+          "lpMinUsd": 1000,
+          "lpMaxUsd": 10000,
+          "maxBuySol": 0.5
+        },
+        "high": {
+          "lpMinUsd": 10000,
+          "maxBuySol": 2.0
+        }
+      },
+      "escalation": {
+        "volumeBoostX": 2.0
+      },
+      "slippageAbortPercent": 7
+    },
+    "contractGuards": {
+      "lpLockMinPercent": 70,
+      "taxMaxPercent": 10,
+      "forbidFlags": [
+        "mint",
+        "freeze",
+        "blacklist",
+        "upgradeable",
+        "closable"
+      ],
+      "topHolderMaxPercent": 20,
+      "minHolders": 10,
+      "testSellMicrolot": true
+    },
+    "gasControl": {
+      "mode": "auto",
+      "manualGas": 0.0005
+    }
+  },
+  "blacklist": {
+    "enabled": true,
+    "file": "blacklist.json",
+    "autoAppendOnRug": true
+  },
+  "wallet": {
+    "roles": {
+      "funding": true,
+      "trading": true,
+      "cold": true
+    },
+    "tradingDailyLimitSol": 5,
+    "jitoReserveSol": {
+      "min": 0.2,
+      "max": 0.5
+    },
+    "autoSweep": {
+      "enabled": true,
+      "thresholdSol": 8,
+      "target": "funding"
+    }
+  },
+  "adapters": {
+    "price": {
+      "sources": [
+        "dexStream",
+        "routePreview"
+      ],
+      "maxDiscrepancyPercent": 2
+    },
+    "liquidity": {
+      "source": "ammOnchain",
+      "fallback": "volumeSpreadModel"
+    },
+    "qtyAfterBuy": {
+      "confirmOnFinalized": true
+    }
+  },
+  "notifications": {
+    "webUI": true,
+    "alerts": [
+      "buy",
+      "sell",
+      "trailingStop",
+      "whaleAlert",
+      "rugWarning",
+      "poolDrain",
+      "spamExit"
+    ],
+    "tradeLogFields": [
+      "type",
+      "reason",
+      "txid",
+      "pnl",
+      "lp",
+      "slippage",
+      "route",
+      "timeToInclude",
+      "vwap"
+    ]
+  },
+  "risk": {
+    "perTradeRiskPercent": 1.0,
+    "targets": {
+      "x2": 50,
+      "x3": 25,
+      "fib": [
+        127,
+        161.8,
+        200
+      ]
+    },
+    "stopLoss": {
+      "mode": "atrOrPercent",
+      "percentEarly": 2
+    },
+    "cooldown": {
+      "lossStreak": 2,
+      "pauseMin": 45
+    }
+  },
+  "profiles": {
+    "twitter": {
+      "scanEveryMin": 5,
+      "tiers": {
+        "A": 1.0,
+        "B": 0.7
+      },
+      "filters": {
+        "memeabilityMin": 0.6,
+        "freq": {
+          "m5": 3,
+          "m15": 7
+        },
+        "maxNameChanges": 2,
+        "stopwords": [
+          "airdrop",
+          "free",
+          "giveaway",
+          "scam",
+          "join fast",
+          "ref"
+        ],
+        "ocrBoost": true,
+        "echoCrossTelegram": true
+      },
+      "socialScore": {
+        "weights": {
+          "text": 0.4,
+          "author": 0.3,
+          "freq": 0.2,
+          "celeb": 0.1,
+          "echo": 0.1
+        },
+        "escalateAt": 0.6
+      }
+    },
+    "pump": {
+      "poolAgeMaxMin": 60,
+      "lpMinUsd": 2000,
+      "vol5MinUsd": 5000,
+      "txCount5MinMin": 10,
+      "buySellMin": 1.8
+    },
+    "whales": {
+      "winRateMin": 0.6,
+      "pelMin": 1.5,
+      "holdTimeMedianDaysMin": 1,
+      "fastSellsMaxPercent": 20,
+      "batchSellDisallow": true,
+      "alertIfGroupBuyUsd": 100000
+    },
+    "findToken": {
+      "lpLockMinPercent": 70,
+      "taxMaxPercent": 10,
+      "forbidFlags": [
+        "mint",
+        "freeze",
+        "blacklist"
+      ],
+      "topHolderMaxPercent": 20,
+      "minHolders": 10
+    },
+    "listings": {
+      "ageDaysMax": 30,
+      "dedupeBy": [
+        "name",
+        "url"
+      ],
+      "needSocial": {
+        "freqM5": 3,
+        "sentimentMin": 0.7
+      }
+    }
+  },
+  "version": "1.0.0",
+  "schemaVersion": "1.0"
+}

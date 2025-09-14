@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Trading Policy Schema",
+  "type": "object",
+  "properties": {
+    "execution": {
+      "type": "object"
+    },
+    "trading": {
+      "type": "object"
+    },
+    "patterns": {
+      "type": "object"
+    },
+    "safety": {
+      "type": "object"
+    },
+    "blacklist": {
+      "type": "object"
+    },
+    "wallet": {
+      "type": "object"
+    },
+    "adapters": {
+      "type": "object"
+    },
+    "notifications": {
+      "type": "object"
+    },
+    "risk": {
+      "type": "object"
+    },
+    "profiles": {
+      "type": "object"
+    },
+    "version": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "execution",
+    "trading",
+    "safety",
+    "version",
+    "schemaVersion"
+  ]
+}
