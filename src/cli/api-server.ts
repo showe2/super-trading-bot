@@ -3,9 +3,12 @@ import http from "http";
 import fs from "fs";
 import path from "path";
 import { jupiter_buy, jupiter_sell } from "../jupiter/adapter.js";
+import { jito_buy } from "../jito/buy.js";
 import { Notifications } from "../notifications/bus.js";
 import { isDevBlacklisted } from "../safety/blacklist.js";
 import { maxBuyForLiquidityUSD } from "../safety/liquidity.js";
+import { Keypair, Connection } from "@solana/web3.js";
+import bs58 from "bs58";
 
 interface ApiResponse {
   success: boolean;
@@ -20,6 +23,29 @@ interface WalletInfo {
   balance?: number;
 }
 
+interface OnChainData {
+  // Price data
+  currentPriceUSD: number;
+
+  // Liquidity data
+  liquidityUSD: number;
+  solReserve?: number;
+  tokenReserve?: number;
+
+  // Pool info
+  poolExists: boolean;
+  poolAddress?: string;
+  dexType?: "raydium" | "pump" | "orca" | "jupiter";
+
+  // Safety metrics
+  volume24h: number;
+
+  // Optional advanced data
+  lpLocked?: boolean;
+  topHolderPercent?: number;
+  tokenTax?: number;
+}
+
 interface TradeRequest {
   mint: string;
   amount: number;
@@ -27,6 +53,8 @@ interface TradeRequest {
   stop_loss?: number;
   take_profit?: number;
   priority_fee?: number;
+  priority?: "normal" | "high";
+  onChain?: OnChainData;
 }
 
 interface WalletRequest {
@@ -110,6 +138,7 @@ class SuperBotAPI {
   private walletFile = path.join(process.cwd(), ".wallet.json");
   private logger = new Logger();
   private rpcUrl: string;
+  private connection: Connection;
 
   constructor() {
     this.rpcUrl =
@@ -118,19 +147,29 @@ class SuperBotAPI {
       "https://api.mainnet-beta.solana.com";
     this.loadWallet();
     this.setupNotifications();
+    this.connection = new Connection(this.rpcUrl, "confirmed");
   }
 
   private loadWallet() {
     try {
+      let privateKeyString: string | null = null;
+
       if (fs.existsSync(this.walletFile)) {
         const data = JSON.parse(fs.readFileSync(this.walletFile, "utf8"));
-        this.currentWallet = data.privateKey;
-        this.logger.logWalletAction("LOADED_FROM_FILE");
+        privateKeyString = data.privateKey;
       } else if (process.env.WALLET_SECRET) {
-        this.currentWallet = process.env.WALLET_SECRET;
-        this.logger.logWalletAction("LOADED_FROM_ENV");
-      } else {
-        console.log("⚠️ No wallet configured");
+        privateKeyString = process.env.WALLET_SECRET;
+      }
+
+      if (privateKeyString) {
+        this.currentWallet = privateKeyString;
+
+        // Extract public key
+        const keypair = Keypair.fromSecretKey(bs58.decode(privateKeyString));
+        const publicKey = keypair.publicKey.toString();
+
+        this.logger.logWalletAction("LOADED_FROM_ENV", publicKey);
+        console.log(`✅ Wallet loaded: ${publicKey}`);
       }
     } catch (error) {
       this.logger.logError("LOAD_WALLET", error.message);
@@ -203,23 +242,91 @@ class SuperBotAPI {
     }
   }
 
-  // Buy endpoint with enhanced logging
+  private calculateMaxBuyFromLiquidity(liquidityUSD: number): number {
+    // Conservative liquidity-based position sizing
+    if (liquidityUSD < 1000) return 0.05; // Very small pools
+    if (liquidityUSD < 5000) return 0.1; // Small pools
+    if (liquidityUSD < 20000) return 0.5; // Medium pools
+    if (liquidityUSD < 100000) return 1.0; // Large pools
+    return 2.0; // Very large pools
+  }
+
+  // Get wallet SOL balance
+  private async getWalletSOLBalance(): Promise<number> {
+    try {
+      if (!this.currentWallet) {
+        throw new Error("No wallet configured");
+      }
+
+      // Get public key from private key
+      const keypair = Keypair.fromSecretKey(bs58.decode(this.currentWallet));
+      const publicKey = keypair.publicKey;
+
+      console.log(`🔍 Checking balance for: ${publicKey.toString()}`);
+
+      // Get balance from Solana blockchain
+      const balanceInLamports = await this.connection.getBalance(publicKey);
+      const solBalance = balanceInLamports / 1e9; // Convert lamports to SOL
+
+      console.log(`💰 Real SOL balance: ${solBalance}`);
+      return solBalance;
+    } catch (error) {
+      console.error(`❌ Failed to get wallet balance:`, error.message);
+      this.logger.logError("GET_WALLET_BALANCE", error.message);
+      return 0;
+    }
+  }
+
+  // Buy endpoint with enhanced logging and on-chain data
   async executeBuy(
     mint: string,
     solAmount: number,
     slippageBps?: number,
     stopLoss?: number,
     takeProfit?: number,
-    priorityFee?: number
+    priority?: string,
+    priorityFee?: number,
+    onChain?: OnChainData
   ): Promise<ApiResponse> {
     let txHash: string | undefined;
 
     try {
       console.log(`🛒 BUY REQUEST: ${solAmount} SOL for ${mint}`);
 
+      // Apply default values
+      const finalStopLoss = stopLoss ?? -20;
+      const finalTakeProfit = takeProfit ?? 50;
+      const finalPriorityFee = priorityFee ?? 0.00001;
+      const finalSlippage = slippageBps ?? 150;
+
+      console.log(
+        `⚙️ Trading params: Stop Loss: ${finalStopLoss}%, Take Profit: ${finalTakeProfit}%, Priority Fee: ${finalPriorityFee} SOL, Slippage: ${finalSlippage}bps`
+      );
+
+      // Log on-chain data if provided
+      if (onChain) {
+        console.log(`📊 On-chain data provided:`);
+        console.log(`   Price: $${onChain.currentPriceUSD}`);
+        console.log(`   Liquidity: $${onChain.liquidityUSD}`);
+        console.log(`   Volume 24h: $${onChain.volume24h}`);
+        console.log(`   Pool exists: ${onChain.poolExists}`);
+        console.log(`   DEX: ${onChain.dexType || "unknown"}`);
+      }
+
       // Validate wallet
       if (!this.currentWallet) {
         const error = "No wallet configured. Set wallet first.";
+        this.logger.logTrade("BUY", mint, solAmount, undefined, false, error);
+        return { success: false, error };
+      }
+
+      // Check wallet balance
+      console.log(`💰 Checking wallet balance...`);
+      const walletBalance = await this.getWalletSOLBalance();
+      console.log(`   Available SOL: ${walletBalance}`);
+
+      if (walletBalance < solAmount) {
+        const error = `Insufficient balance. Have ${walletBalance} SOL, need ${solAmount} SOL`;
         this.logger.logTrade("BUY", mint, solAmount, undefined, false, error);
         return { success: false, error };
       }
@@ -238,26 +345,92 @@ class SuperBotAPI {
         return { success: false, error };
       }
 
-      // Safety checks
-      const blacklistCheck = isDevBlacklisted("unknown");
-      if (blacklistCheck.blocked) {
-        const error = `Blacklisted: ${blacklistCheck.reason}`;
-        this.logger.logTrade("BUY", mint, solAmount, undefined, false, error);
-        return { success: false, error };
-      }
+      // Use on-chain data for safety checks if provided
+      let finalAmount = solAmount;
 
-      // Liquidity check
-      const maxAllowed = maxBuyForLiquidityUSD(5000);
-      const finalAmount = Math.min(solAmount, maxAllowed);
+      let priceImpact = 0;
 
-      if (finalAmount < solAmount) {
-        console.log(
-          `⚠️ Amount reduced from ${solAmount} to ${finalAmount} SOL due to liquidity limits`
+      // Try Jupiter first (most accurate)
+      priceImpact = await getPriceImpactFromJupiter(mint, finalAmount);
+
+      // Fallback to calculation if Jupiter fails
+      if (priceImpact === 0 && onChain?.solReserve && onChain?.tokenReserve) {
+        priceImpact = calculatePriceImpact(
+          onChain.solReserve,
+          onChain.tokenReserve,
+          finalAmount
         );
       }
 
+      // Safety check
+      if (priceImpact > 10) {
+        throw new Error(`Price impact too high: ${priceImpact}% (max 10%)`);
+      }
+
+      if (onChain) {
+        // Check if pool exists
+        if (!onChain.poolExists) {
+          const error = "No tradeable pool exists for this token";
+          this.logger.logTrade("BUY", mint, solAmount, undefined, false, error);
+          return { success: false, error };
+        }
+
+        // Apply liquidity-based position sizing
+        const maxAllowed = this.calculateMaxBuyFromLiquidity(
+          onChain.liquidityUSD
+        );
+        finalAmount = Math.min(solAmount, maxAllowed);
+
+        if (finalAmount < solAmount) {
+          console.log(
+            `⚠️ Amount reduced from ${solAmount} to ${finalAmount} SOL due to liquidity limits`
+          );
+        }
+
+        // Check token tax if provided
+        if (onChain.tokenTax && onChain.tokenTax > 10) {
+          const error = `Token tax too high: ${onChain.tokenTax}% (max 10%)`;
+          this.logger.logTrade("BUY", mint, solAmount, undefined, false, error);
+          return { success: false, error };
+        }
+      } else {
+        // Fallback to old safety checks if no on-chain data
+        console.log(
+          `⚠️ No on-chain data provided, using fallback safety checks`
+        );
+
+        const blacklistCheck = isDevBlacklisted("unknown");
+        if (blacklistCheck.blocked) {
+          const error = `Blacklisted: ${blacklistCheck.reason}`;
+          this.logger.logTrade("BUY", mint, solAmount, undefined, false, error);
+          return { success: false, error };
+        }
+
+        const maxAllowed = maxBuyForLiquidityUSD(5000); // Fallback liquidity assumption
+        finalAmount = Math.min(solAmount, maxAllowed);
+      }
+
       // Execute buy
-      const result = await jupiter_buy(mint, finalAmount, slippageBps);
+      let result;
+
+      if (priority === "high") {
+        console.log(`⚡ Using JITO for high-priority execution`);
+        result = await jito_buy(
+          mint,
+          finalAmount,
+          finalSlippage,
+          finalPriorityFee
+        );
+      } else {
+        console.log(`🔄 Using Jupiter for normal execution`);
+        result = await jupiter_buy(
+          mint,
+          finalAmount,
+          finalSlippage,
+          finalPriorityFee
+        );
+      }
+
       txHash = result.txid;
 
       // Check transaction status
@@ -295,9 +468,10 @@ class SuperBotAPI {
           price: result.price || 0,
           timestamp: new Date().toISOString(),
           tx_status: txStatus,
-          stop_loss: stopLoss,
-          take_profit: takeProfit,
-          priority_fee: priorityFee,
+          stop_loss: finalStopLoss,
+          take_profit: finalTakeProfit,
+          priority_fee: finalPriorityFee,
+          walletBalance: walletBalance,
         },
         message: `Successfully bought ${finalAmount} SOL worth of ${mint}`,
       };
@@ -319,8 +493,7 @@ class SuperBotAPI {
   async executeSell(
     mint: string,
     tokenAmount: number,
-    percentage?: number,
-    slippageBps?: number
+    percentage?: number
   ): Promise<ApiResponse> {
     let txHash: string | undefined;
 
@@ -375,7 +548,7 @@ class SuperBotAPI {
       }
 
       // Execute sell
-      const result = await jupiter_sell(mint, sellAmount, slippageBps);
+      const result = await jupiter_sell(mint, sellAmount);
       txHash = result.txid;
 
       // Check transaction status
@@ -462,13 +635,19 @@ class SuperBotAPI {
 
   async getWalletInfo(): Promise<ApiResponse> {
     try {
-      const address = this.currentWallet
-        ? "DERIVED_PUBLIC_KEY_HERE"
-        : undefined;
+      let publicKey: string | undefined;
+      let balance: number | undefined;
+
+      if (this.currentWallet) {
+        const keypair = Keypair.fromSecretKey(bs58.decode(this.currentWallet));
+        publicKey = keypair.publicKey.toString();
+        balance = await this.getWalletSOLBalance();
+      }
+
       const info: WalletInfo = {
         hasPrivateKey: !!this.currentWallet,
-        address,
-        balance: this.currentWallet ? 1.234 : undefined,
+        address: publicKey,
+        balance: balance,
       };
 
       return { success: true, data: info };
@@ -589,6 +768,68 @@ function getClientIP(req: http.IncomingMessage): string {
   );
 }
 
+function calculatePriceImpact(
+  solReserve: number,
+  tokenReserve: number,
+  solAmountIn: number
+): number {
+  // Constant Product Formula: x * y = k
+  // Where x = SOL reserve, y = token reserve
+
+  const k = solReserve * tokenReserve; // Constant product
+
+  // After adding SOL, new reserves:
+  const newSolReserve = solReserve + solAmountIn;
+  const newTokenReserve = k / newSolReserve;
+
+  // Tokens you get:
+  const tokensOut = tokenReserve - newTokenReserve;
+
+  // Price before trade:
+  const priceBefore = solReserve / tokenReserve;
+
+  // Price after trade (for remaining tokens):
+  const priceAfter = newSolReserve / newTokenReserve;
+
+  // Price impact percentage:
+  const priceImpact = ((priceAfter - priceBefore) / priceBefore) * 100;
+
+  console.log(`💥 Calculated price impact: ${priceImpact.toFixed(2)}%`);
+  return priceImpact;
+}
+
+async function getPriceImpactFromJupiter(
+  tokenMint: string,
+  solAmount: number
+): Promise<number> {
+  try {
+    const lamports = Math.floor(solAmount * 1e9); // Convert SOL to lamports
+
+    const response = await fetch(
+      `https://quote-api.jup.ag/v6/quote?` +
+        `inputMint=So11111111111111111111111111111111111111112&` + // SOL mint
+        `outputMint=${tokenMint}&` +
+        `amount=${lamports}&` +
+        `slippageBps=50`
+    );
+
+    if (!response.ok) {
+      throw new Error(`Jupiter API failed: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    // Jupiter returns price impact as string percentage
+    const priceImpact = parseFloat(data.priceImpactPct || "0");
+
+    console.log(`💥 Price impact for ${solAmount} SOL: ${priceImpact}%`);
+    return priceImpact;
+  } catch (error) {
+    console.error("Failed to get price impact from Jupiter:", error);
+    return 0; // Return 0 if can't calculate
+  }
+}
+
 // Main server
 const api = new SuperBotAPI();
 const logger = api.getLogger();
@@ -629,7 +870,9 @@ const server = http.createServer(async (req, res) => {
         body.slippage,
         body.stop_loss,
         body.take_profit,
-        body.priority_fee
+        body.priority,
+        body.priority_fee,
+        body.onChain
       );
       statusCode = result.success ? 200 : 400;
     }
@@ -637,12 +880,7 @@ const server = http.createServer(async (req, res) => {
     // Sell endpoint
     else if (method === "POST" && url === "/api/sell") {
       const body: TradeRequest & { percentage?: number } = await parseBody(req);
-      result = await api.executeSell(
-        body.mint,
-        body.amount,
-        body.percentage,
-        body.slippage
-      );
+      result = await api.executeSell(body.mint, body.percentage);
       statusCode = result.success ? 200 : 400;
     }
 

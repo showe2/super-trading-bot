@@ -12,6 +12,8 @@
     "policy:check": "ts-node src/cli/policy_check.ts"
   },
   "dependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "bs58": "^6.0.0",
     "dotenv": "^16.4.5"
   },
   "devDependencies": {
