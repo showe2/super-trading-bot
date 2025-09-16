@@ -7,8 +7,10 @@ import { jito_buy } from "../jito/buy.js";
 import { Notifications } from "../notifications/bus.js";
 import { isDevBlacklisted } from "../safety/blacklist.js";
 import { maxBuyForLiquidityUSD } from "../safety/liquidity.js";
-import { Keypair, Connection } from "@solana/web3.js";
+import { Keypair, Connection, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
+import { transactionRepo } from "../database/repositories/TransactionRepository.js";
+import { CreateTransactionRequest } from "../database/entities/Transaction.js";
 
 interface ApiResponse {
   success: boolean;
@@ -23,24 +25,16 @@ interface WalletInfo {
   balance?: number;
 }
 
-interface OnChainData {
-  // Price data
+export interface OnChainData {
   currentPriceUSD: number;
-
-  // Liquidity data
   liquidityUSD: number;
+  poolExists: boolean;
+  volume24h: number;
   solReserve?: number;
   tokenReserve?: number;
-
-  // Pool info
-  poolExists: boolean;
   poolAddress?: string;
   dexType?: "raydium" | "pump" | "orca" | "jupiter";
-
-  // Safety metrics
-  volume24h: number;
-
-  // Optional advanced data
+  priceImpact?: number;
   lpLocked?: boolean;
   topHolderPercent?: number;
   tokenTax?: number;
@@ -284,21 +278,21 @@ class SuperBotAPI {
     slippageBps?: number,
     stopLoss?: number,
     takeProfit?: number,
-    priority?: string,
     priorityFee?: number,
+    priority?: "normal" | "high",
     onChain?: OnChainData
   ): Promise<ApiResponse> {
     let txHash: string | undefined;
+    let walletPublicKey: string | undefined;
+
+    // Apply default values
+    const finalStopLoss = stopLoss ?? -20; // Default: -20% stop loss
+    const finalTakeProfit = takeProfit ?? 50; // Default: +50% take profit
+    const finalPriorityFee = priorityFee ?? 0.00001; // Default: 0.00001 SOL priority fee
+    const finalSlippage = slippageBps ? Math.floor(slippageBps * 100) : 150; // Default: 1.5% slippage
 
     try {
       console.log(`🛒 BUY REQUEST: ${solAmount} SOL for ${mint}`);
-
-      // Apply default values
-      const finalStopLoss = stopLoss ?? -20;
-      const finalTakeProfit = takeProfit ?? 50;
-      const finalPriorityFee = priorityFee ?? 0.00001;
-      const finalSlippage = slippageBps ?? 150;
-
       console.log(
         `⚙️ Trading params: Stop Loss: ${finalStopLoss}%, Take Profit: ${finalTakeProfit}%, Priority Fee: ${finalPriorityFee} SOL, Slippage: ${finalSlippage}bps`
       );
@@ -311,6 +305,8 @@ class SuperBotAPI {
         console.log(`   Volume 24h: $${onChain.volume24h}`);
         console.log(`   Pool exists: ${onChain.poolExists}`);
         console.log(`   DEX: ${onChain.dexType || "unknown"}`);
+        if (onChain.priceImpact)
+          console.log(`   Price Impact: ${onChain.priceImpact}%`);
       }
 
       // Validate wallet
@@ -319,6 +315,10 @@ class SuperBotAPI {
         this.logger.logTrade("BUY", mint, solAmount, undefined, false, error);
         return { success: false, error };
       }
+
+      // Get wallet public key
+      const keypair = Keypair.fromSecretKey(bs58.decode(this.currentWallet));
+      walletPublicKey = keypair.publicKey.toString();
 
       // Check wallet balance
       console.log(`💰 Checking wallet balance...`);
@@ -348,25 +348,6 @@ class SuperBotAPI {
       // Use on-chain data for safety checks if provided
       let finalAmount = solAmount;
 
-      let priceImpact = 0;
-
-      // Try Jupiter first (most accurate)
-      priceImpact = await getPriceImpactFromJupiter(mint, finalAmount);
-
-      // Fallback to calculation if Jupiter fails
-      if (priceImpact === 0 && onChain?.solReserve && onChain?.tokenReserve) {
-        priceImpact = calculatePriceImpact(
-          onChain.solReserve,
-          onChain.tokenReserve,
-          finalAmount
-        );
-      }
-
-      // Safety check
-      if (priceImpact > 10) {
-        throw new Error(`Price impact too high: ${priceImpact}% (max 10%)`);
-      }
-
       if (onChain) {
         // Check if pool exists
         if (!onChain.poolExists) {
@@ -385,6 +366,13 @@ class SuperBotAPI {
           console.log(
             `⚠️ Amount reduced from ${solAmount} to ${finalAmount} SOL due to liquidity limits`
           );
+        }
+
+        // Check price impact if provided
+        if (onChain.priceImpact && onChain.priceImpact > 10) {
+          const error = `Price impact too high: ${onChain.priceImpact}% (max 10%)`;
+          this.logger.logTrade("BUY", mint, solAmount, undefined, false, error);
+          return { success: false, error };
         }
 
         // Check token tax if provided
@@ -410,17 +398,63 @@ class SuperBotAPI {
         finalAmount = Math.min(solAmount, maxAllowed);
       }
 
-      // Execute buy
-      let result;
+      // 💾 Save initial transaction record to database
+      let dbTransactionId: number | null = null;
+      try {
+        console.log(`💾 Saving transaction to database...`);
 
-      if (priority === "high") {
-        console.log(`⚡ Using JITO for high-priority execution`);
-        result = await jito_buy(
-          mint,
-          finalAmount,
-          finalSlippage,
-          finalPriorityFee
+        const transactionData: CreateTransactionRequest = {
+          tx_hash: "PENDING", // Will be updated after execution
+          wallet_address: walletPublicKey,
+          token_mint: mint,
+          type: "BUY",
+          sol_amount: finalAmount,
+          token_amount: "0", // Will be updated after execution
+          price_per_token: onChain?.currentPriceUSD,
+          slippage_percent: finalSlippage / 100, // Convert bps to percentage
+          priority_fee: finalPriorityFee,
+          priority_type: priority || "normal",
+          stop_loss_percent: finalStopLoss,
+          take_profit_percent: finalTakeProfit,
+          on_chain_data: onChain,
+        };
+
+        const savedTransaction = await transactionRepo.create(transactionData);
+        dbTransactionId = savedTransaction.id;
+        console.log(
+          `✅ Transaction saved to database with ID: ${dbTransactionId}`
         );
+      } catch (dbError) {
+        console.error("❌ Failed to save to database:", dbError.message);
+        this.logger.logError("DB_SAVE", dbError.message);
+        // Continue anyway - don't fail the trade because of DB issues
+      }
+
+      // Route to appropriate trading method
+      let result;
+      if (priority === "high") {
+        const isDevnet = this.rpcUrl.includes("devnet");
+
+        if (isDevnet) {
+          console.log(
+            `⚠️ Jito not available on devnet, using Jupiter with high priority fee`
+          );
+          const highPriorityFee = finalPriorityFee * 10; // 10x priority fee
+          result = await jupiter_buy(
+            mint,
+            finalAmount,
+            finalSlippage,
+            highPriorityFee
+          );
+        } else {
+          console.log(`⚡ Using JITO for high-priority execution`);
+          result = await jito_buy(
+            mint,
+            finalAmount,
+            finalSlippage,
+            finalPriorityFee
+          );
+        }
       } else {
         console.log(`🔄 Using Jupiter for normal execution`);
         result = await jupiter_buy(
@@ -440,6 +474,43 @@ class SuperBotAPI {
       } else {
         // For stub implementation
         txStatus = { tx_hash: txHash || "STUB", confirmed: true };
+      }
+
+      // 💾 Update database record with real transaction hash and results
+      if (dbTransactionId && txHash) {
+        try {
+          console.log(
+            `💾 Updating database record with transaction hash: ${txHash}`
+          );
+
+          // Update the transaction hash
+          await transactionRepo.updateTransactionHash(dbTransactionId, txHash);
+
+          // Update status
+          const status = txStatus?.confirmed ? "CONFIRMED" : "PENDING";
+          await transactionRepo.updateStatus(
+            txHash,
+            status,
+            txStatus?.confirmed ? new Date() : undefined
+          );
+
+          // Update additional fields if available
+          if (result.price || onChain?.priceImpact) {
+            await transactionRepo.updateResults(txHash, {
+              price_per_token: result.price,
+              price_impact_percent: onChain?.priceImpact,
+              total_cost: finalAmount + (finalPriorityFee || 0),
+            });
+          }
+
+          console.log(`✅ Database record updated successfully`);
+        } catch (dbError) {
+          console.error(
+            "❌ Failed to update database record:",
+            dbError.message
+          );
+          this.logger.logError("DB_UPDATE", dbError.message);
+        }
       }
 
       // Log successful trade
@@ -471,7 +542,9 @@ class SuperBotAPI {
           stop_loss: finalStopLoss,
           take_profit: finalTakeProfit,
           priority_fee: finalPriorityFee,
+          onChainData: onChain,
           walletBalance: walletBalance,
+          dbTransactionId: dbTransactionId, // Include DB ID in response
         },
         message: `Successfully bought ${finalAmount} SOL worth of ${mint}`,
       };
@@ -485,25 +558,31 @@ class SuperBotAPI {
         error.message
       );
       this.logger.logError("BUY_EXECUTION", error.message);
+
+      // 💾 Update database record with error if we created one
+      if (txHash) {
+        try {
+          await transactionRepo.updateStatus(txHash, "FAILED");
+        } catch (dbError) {
+          console.error(
+            "❌ Failed to update failed transaction in database:",
+            dbError.message
+          );
+        }
+      }
+
       return { success: false, error: error.message };
     }
   }
 
   // Sell endpoint with enhanced logging
-  async executeSell(
-    mint: string,
-    tokenAmount: number,
-    percentage?: number
-  ): Promise<ApiResponse> {
+  async executeSell(mint: string, percentage?: number): Promise<ApiResponse> {
     let txHash: string | undefined;
+    let actualSellAmount: number = 0;
 
     try {
-      const sellAmount = tokenAmount;
-      const sellPercent = percentage || 100;
-
-      console.log(
-        `💰 SELL REQUEST: ${sellAmount} tokens (${sellPercent}%) of ${mint}`
-      );
+      const sellPercent = percentage || 100; // Default to 100% if not specified
+      console.log(`💰 SELL REQUEST: ${sellPercent}% of ${mint} holdings`);
 
       // Validate wallet
       if (!this.currentWallet) {
@@ -511,7 +590,7 @@ class SuperBotAPI {
         this.logger.logTrade(
           "SELL",
           mint,
-          sellPercent,
+          actualSellAmount,
           undefined,
           false,
           error
@@ -525,7 +604,7 @@ class SuperBotAPI {
         this.logger.logTrade(
           "SELL",
           mint,
-          sellPercent,
+          actualSellAmount,
           undefined,
           false,
           error
@@ -533,13 +612,50 @@ class SuperBotAPI {
         return { success: false, error };
       }
 
-      // Validate amount
-      if (sellAmount <= 0) {
-        const error = "Token amount must be greater than 0";
+      // Validate percentage
+      if (sellPercent <= 0 || sellPercent > 100) {
+        const error = "Percentage must be between 1 and 100";
         this.logger.logTrade(
           "SELL",
           mint,
-          sellPercent,
+          actualSellAmount,
+          undefined,
+          false,
+          error
+        );
+        return { success: false, error };
+      }
+
+      // Get actual wallet token balance
+      console.log(`💰 Checking wallet token balance for ${mint}...`);
+      const walletTokenBalance = await this.getWalletTokenBalance(mint);
+      console.log(`   Available tokens: ${walletTokenBalance}`);
+
+      if (walletTokenBalance === 0) {
+        const error = `No tokens found for ${mint} in wallet`;
+        this.logger.logTrade(
+          "SELL",
+          mint,
+          actualSellAmount,
+          undefined,
+          false,
+          error
+        );
+        return { success: false, error };
+      }
+
+      // Calculate actual amount to sell based on percentage
+      actualSellAmount = Math.floor((walletTokenBalance * sellPercent) / 100);
+      console.log(
+        `📊 Selling ${sellPercent}% of ${walletTokenBalance} tokens = ${actualSellAmount} tokens`
+      );
+
+      if (actualSellAmount <= 0) {
+        const error = `Calculated sell amount is 0 (${sellPercent}% of ${walletTokenBalance})`;
+        this.logger.logTrade(
+          "SELL",
+          mint,
+          actualSellAmount,
           undefined,
           false,
           error
@@ -548,7 +664,7 @@ class SuperBotAPI {
       }
 
       // Execute sell
-      const result = await jupiter_sell(mint, sellAmount);
+      const result = await jupiter_sell(mint, actualSellAmount);
       txHash = result.txid;
 
       // Check transaction status
@@ -564,7 +680,7 @@ class SuperBotAPI {
       this.logger.logTrade(
         "SELL",
         mint,
-        sellPercent,
+        actualSellAmount,
         txHash,
         txStatus?.confirmed
       );
@@ -573,7 +689,7 @@ class SuperBotAPI {
         type: "sell",
         level: "success",
         title: `SELL ${mint}`,
-        body: `${sellAmount} tokens (${sellPercent}%)`,
+        body: `${actualSellAmount} tokens (${sellPercent}%)`,
         link: result.txid,
       });
 
@@ -582,18 +698,20 @@ class SuperBotAPI {
         data: {
           txid: result.txid,
           mint,
-          tokenAmount: sellAmount,
+          tokensInWallet: walletTokenBalance,
+          tokensSold: actualSellAmount,
           percentage: sellPercent,
+          solReceived: result.solReceived || 0,
           timestamp: new Date().toISOString(),
           tx_status: txStatus,
         },
-        message: `Successfully sold ${sellAmount} tokens (${sellPercent}%) of ${mint}`,
+        message: `Successfully sold ${actualSellAmount} tokens (${sellPercent}%) of ${mint}`,
       };
     } catch (error) {
       this.logger.logTrade(
         "SELL",
         mint,
-        percentage || 100,
+        actualSellAmount || 0,
         txHash,
         false,
         error.message
@@ -654,6 +772,67 @@ class SuperBotAPI {
     } catch (error) {
       this.logger.logError("GET_WALLET_INFO", error.message);
       return { success: false, error: error.message };
+    }
+  }
+
+  private async getWalletTokenBalance(tokenMint: string): Promise<number> {
+    try {
+      if (!this.currentWallet) {
+        throw new Error("No wallet configured");
+      }
+
+      // Validate mint address format
+      let mintPublicKey: PublicKey;
+      try {
+        mintPublicKey = new PublicKey(tokenMint);
+        // Additional validation - check if it's a valid base58 string
+        if (mintPublicKey.toString() !== tokenMint) {
+          throw new Error("Invalid mint address format");
+        }
+      } catch (error) {
+        throw new Error(`Invalid mint address: ${tokenMint}`);
+      }
+
+      // Get public key from private key
+      const keypair = Keypair.fromSecretKey(bs58.decode(this.currentWallet));
+      const publicKey = keypair.publicKey;
+
+      console.log(`🔍 Checking token balance for: ${tokenMint}`);
+      console.log(`🔍 Wallet address: ${publicKey.toString()}`);
+
+      // Get token accounts for this mint (use the PublicKey object)
+      const tokenAccounts = await this.connection.getTokenAccountsByOwner(
+        publicKey,
+        {
+          mint: mintPublicKey, // ← Use PublicKey object, not string
+        }
+      );
+
+      if (tokenAccounts.value.length === 0) {
+        console.log(`❌ No token accounts found for ${tokenMint}`);
+        return 0;
+      }
+
+      // Get the token account with the highest balance
+      let totalBalance = 0;
+
+      for (const tokenAccount of tokenAccounts.value) {
+        const accountInfo = await this.connection.getTokenAccountBalance(
+          tokenAccount.pubkey
+        );
+        const balance = parseFloat(accountInfo.value.amount);
+        totalBalance += balance;
+        console.log(
+          `💰 Account ${tokenAccount.pubkey.toString()}: ${balance} tokens`
+        );
+      }
+
+      console.log(`🪙 Total token balance: ${totalBalance}`);
+      return totalBalance;
+    } catch (error) {
+      console.error(`❌ Failed to get token balance:`, error.message);
+      this.logger.logError("GET_TOKEN_BALANCE", error.message);
+      return 0;
     }
   }
 
@@ -870,8 +1049,8 @@ const server = http.createServer(async (req, res) => {
         body.slippage,
         body.stop_loss,
         body.take_profit,
-        body.priority,
         body.priority_fee,
+        body.priority,
         body.onChain
       );
       statusCode = result.success ? 200 : 400;
@@ -879,7 +1058,7 @@ const server = http.createServer(async (req, res) => {
 
     // Sell endpoint
     else if (method === "POST" && url === "/api/sell") {
-      const body: TradeRequest & { percentage?: number } = await parseBody(req);
+      const body: { mint: string; percentage?: number } = await parseBody(req);
       result = await api.executeSell(body.mint, body.percentage);
       statusCode = result.success ? 200 : 400;
     }
