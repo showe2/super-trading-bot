@@ -10,7 +10,10 @@ import { maxBuyForLiquidityUSD } from "../safety/liquidity.js";
 import { Keypair, Connection, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 import { transactionRepo } from "../database/repositories/TransactionRepository.js";
-import { CreateTransactionRequest } from "../database/entities/Transaction.js";
+import {
+  CreateTransactionRequest,
+  OnChainData,
+} from "../database/entities/Transaction.js";
 
 interface ApiResponse {
   success: boolean;
@@ -25,21 +28,6 @@ interface WalletInfo {
   balance?: number;
 }
 
-export interface OnChainData {
-  currentPriceUSD: number;
-  liquidityUSD: number;
-  poolExists: boolean;
-  volume24h: number;
-  solReserve?: number;
-  tokenReserve?: number;
-  poolAddress?: string;
-  dexType?: "raydium" | "pump" | "orca" | "jupiter";
-  priceImpact?: number;
-  lpLocked?: boolean;
-  topHolderPercent?: number;
-  tokenTax?: number;
-}
-
 interface TradeRequest {
   mint: string;
   amount: number;
@@ -48,7 +36,7 @@ interface TradeRequest {
   take_profit?: number;
   priority_fee?: number;
   priority?: "normal" | "high";
-  onChain?: OnChainData;
+  onChain: OnChainData;
 }
 
 interface WalletRequest {
@@ -173,6 +161,9 @@ class SuperBotAPI {
   private saveWallet() {
     try {
       if (this.currentWallet) {
+        const keypair = Keypair.fromSecretKey(bs58.decode(this.currentWallet));
+        const publicKey = keypair.publicKey.toString();
+
         fs.writeFileSync(
           this.walletFile,
           JSON.stringify({
@@ -180,7 +171,8 @@ class SuperBotAPI {
             updatedAt: new Date().toISOString(),
           })
         );
-        this.logger.logWalletAction("SAVED");
+
+        this.logger.logWalletAction("SAVED", publicKey);
       }
     } catch (error) {
       this.logger.logError("SAVE_WALLET", error.message);
@@ -245,6 +237,39 @@ class SuperBotAPI {
     return 2.0; // Very large pools
   }
 
+  private calculatePriceImpact(
+    solReserve: number,
+    tokenReserve: number,
+    solAmountIn: number
+  ): number {
+    try {
+      if (solReserve <= 0 || tokenReserve <= 0 || solAmountIn <= 0) {
+        return 0;
+      }
+
+      // Constant Product Formula: x * y = k
+      const k = solReserve * tokenReserve;
+
+      // After adding SOL, new reserves:
+      const newSolReserve = solReserve + solAmountIn;
+      const newTokenReserve = k / newSolReserve;
+
+      // Price before trade:
+      const priceBefore = solReserve / tokenReserve;
+
+      // Price after trade:
+      const priceAfter = newSolReserve / newTokenReserve;
+
+      // Price impact percentage:
+      const priceImpact = ((priceAfter - priceBefore) / priceBefore) * 100;
+
+      return Math.abs(priceImpact);
+    } catch (error) {
+      console.error("Failed to calculate price impact:", error.message);
+      return 0;
+    }
+  }
+
   // Get wallet SOL balance
   private async getWalletSOLBalance(): Promise<number> {
     try {
@@ -305,8 +330,6 @@ class SuperBotAPI {
         console.log(`   Volume 24h: $${onChain.volume24h}`);
         console.log(`   Pool exists: ${onChain.poolExists}`);
         console.log(`   DEX: ${onChain.dexType || "unknown"}`);
-        if (onChain.priceImpact)
-          console.log(`   Price Impact: ${onChain.priceImpact}%`);
       }
 
       // Validate wallet
@@ -369,10 +392,46 @@ class SuperBotAPI {
         }
 
         // Check price impact if provided
-        if (onChain.priceImpact && onChain.priceImpact > 10) {
-          const error = `Price impact too high: ${onChain.priceImpact}% (max 10%)`;
-          this.logger.logTrade("BUY", mint, solAmount, undefined, false, error);
-          return { success: false, error };
+        let calculatedPriceImpact = 0;
+        try {
+          console.log(`📊 Calculating price impact...`);
+
+          // Try Jupiter first (most accurate)
+          calculatedPriceImpact = await getPriceImpactFromJupiter(
+            mint,
+            finalAmount
+          );
+
+          // Fallback to AMM calculation if Jupiter fails and we have reserves
+          if (
+            calculatedPriceImpact === 0 &&
+            onChain?.solReserve &&
+            onChain?.tokenReserve
+          ) {
+            calculatedPriceImpact = calculatePriceImpact(
+              onChain.solReserve,
+              onChain.tokenReserve,
+              finalAmount
+            );
+          }
+
+          console.log(`💥 Price impact: ${calculatedPriceImpact}%`);
+
+          // Safety check
+          if (calculatedPriceImpact > 10) {
+            const error = `Price impact too high: ${calculatedPriceImpact}% (max 10%)`;
+            this.logger.logTrade(
+              "BUY",
+              mint,
+              finalAmount,
+              undefined,
+              false,
+              error
+            );
+            return { success: false, error };
+          }
+        } catch (error) {
+          console.log(`⚠️ Price impact calculation failed: ${error.message}`);
         }
 
         // Check token tax if provided
@@ -487,21 +546,12 @@ class SuperBotAPI {
           await transactionRepo.updateTransactionHash(dbTransactionId, txHash);
 
           // Update status
-          const status = txStatus?.confirmed ? "CONFIRMED" : "PENDING";
+          const status = txStatus?.confirmed ? "CONFIRMED" : "FAILED";
           await transactionRepo.updateStatus(
             txHash,
             status,
             txStatus?.confirmed ? new Date() : undefined
           );
-
-          // Update additional fields if available
-          if (result.price || onChain?.priceImpact) {
-            await transactionRepo.updateResults(txHash, {
-              price_per_token: result.price,
-              price_impact_percent: onChain?.priceImpact,
-              total_cost: finalAmount + (finalPriorityFee || 0),
-            });
-          }
 
           console.log(`✅ Database record updated successfully`);
         } catch (dbError) {
@@ -733,15 +783,17 @@ class SuperBotAPI {
       this.currentWallet = privateKey;
       this.saveWallet();
 
-      const derivedAddress = "DERIVED_PUBLIC_KEY_HERE"; // In real impl, derive from private key
-      this.logger.logWalletAction("SET_SUCCESS", derivedAddress);
+      const keypair = Keypair.fromSecretKey(bs58.decode(privateKey));
+      const publicKey = keypair.publicKey.toString();
+
+      this.logger.logWalletAction("SET_SUCCESS", publicKey);
 
       return {
         success: true,
         message: "Wallet updated successfully",
         data: {
           hasPrivateKey: true,
-          address: derivedAddress,
+          address: publicKey,
         },
       };
     } catch (error) {

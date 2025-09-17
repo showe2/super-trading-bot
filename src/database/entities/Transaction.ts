@@ -42,18 +42,71 @@ export interface TransactionEntity {
 
 // On-chain data structure
 export interface OnChainData {
-  currentPriceUSD?: number;
-  liquidityUSD?: number;
-  solReserve?: number;
-  tokenReserve?: number;
-  poolExists?: boolean;
-  poolAddress?: string;
-  dexType?: "raydium" | "pump" | "orca" | "jupiter";
-  volume24h?: number;
-  priceImpact?: number;
-  lpLocked?: boolean;
-  topHolderPercent?: number;
-  tokenTax?: number;
+  // Basic price data
+  currentPriceUSD: number;
+  priceChange24h?: number;
+  priceChange1h?: number;
+
+  // Liquidity metrics
+  liquidityUSD: number;
+  liquiditySOL?: number;
+  liquidityToken?: number;
+
+  // Market cap
+  marketCapUSD?: number;
+  fullyDilutedMarketCap?: number;
+
+  // Volume metrics
+  volume24h: number;
+  volume1h?: number;
+  volume5min?: number;
+  volumeChange24h?: number;
+
+  // Trading activity
+  txCount24h?: number;
+  txCount1h?: number;
+  txCount5min?: number;
+  uniqueWallets24h?: number;
+
+  // Pool/DEX data
+  poolExists: boolean;
+  poolAddress: string;
+  dexType: string;
+  poolAge?: number; // seconds since pool creation
+
+  // Reserves
+  solReserve: number;
+  tokenReserve: number;
+
+  // Whale analysis (1h window)
+  whales1h?: {
+    whaleCount: number;
+    whaleVolume: number;
+    whaleVolumePercent: number;
+    largestWhaleAmount: number;
+    avgWhaleSize: number;
+    whaleRisk: "low" | "medium" | "high" | "unknown";
+  };
+
+  // Security metrics
+  lpLocked: boolean;
+  lpLockedPercent?: number;
+  topHolderPercent: number;
+  holderCount?: number;
+  tokenTax: number;
+
+  // Token metadata
+  name?: string;
+  symbol?: string;
+  decimals?: number;
+  supply?: number;
+
+  // AI Analysis
+  aiReasoning?: string; // Default: "Ручная покупка"
+
+  // Data quality indicators
+  lastUpdated?: number; // Unix timestamp
+  apiErrors?: string[];
 }
 
 // Helper interfaces

@@ -1,80 +1,50 @@
 import { db } from "../connection.js";
 import {
-  TransactionEntity,
   CreateTransactionRequest,
   TransactionWithDetails,
 } from "../entities/Transaction.js";
 
 export class TransactionRepository {
-  // Create a new transaction
-  async create(
-    transaction: CreateTransactionRequest
-  ): Promise<TransactionEntity> {
-    try {
-      console.log(`💾 Saving transaction to database: ${transaction.tx_hash}`);
+  async create(transaction: CreateTransactionRequest): Promise<any> {
+    const query = `
+      INSERT INTO transactions (
+        tx_hash, wallet_address, token_mint, type, status,
+        sol_amount, token_amount, price_per_token,
+        slippage_percent, priority_fee, priority_type,
+        stop_loss_percent, take_profit_percent, on_chain_data
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      RETURNING *
+    `;
 
-      // Get or create wallet
-      const walletId = await this.getOrCreateWallet(transaction.wallet_address);
+    const values = [
+      transaction.tx_hash,
+      transaction.wallet_address,
+      transaction.token_mint,
+      transaction.type,
+      "PENDING",
+      transaction.sol_amount,
+      transaction.token_amount,
+      transaction.price_per_token,
+      transaction.slippage_percent,
+      transaction.priority_fee,
+      transaction.priority_type || "normal",
+      transaction.stop_loss_percent,
+      transaction.take_profit_percent,
+      JSON.stringify(transaction.on_chain_data),
+    ];
 
-      // Get or create token
-      const tokenId = await this.getOrCreateToken(transaction.token_mint);
-
-      const query = `
-        INSERT INTO transactions (
-          tx_hash, wallet_id, token_id, type, status,
-          sol_amount, token_amount, price_per_token,
-          slippage_percent, priority_fee, priority_type,
-          stop_loss_percent, take_profit_percent, on_chain_data
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-        RETURNING *
-      `;
-
-      const values = [
-        transaction.tx_hash,
-        walletId,
-        tokenId,
-        transaction.type,
-        "PENDING", // Default status
-        transaction.sol_amount,
-        transaction.token_amount,
-        transaction.price_per_token,
-        transaction.slippage_percent,
-        transaction.priority_fee,
-        transaction.priority_type || "normal",
-        transaction.stop_loss_percent,
-        transaction.take_profit_percent,
-        JSON.stringify(transaction.on_chain_data),
-      ];
-
-      const result = await db.query(query, values);
-
-      console.log(`✅ Transaction saved with ID: ${result.rows[0].id}`);
-      return result.rows[0];
-    } catch (error) {
-      console.error(`❌ Failed to save transaction:`, error.message);
-      throw error;
-    }
+    const result = await db.query(query, values);
+    return result.rows[0];
   }
 
   // Update transaction status
   async updateStatus(
     txHash: string,
-    status: "PENDING" | "CONFIRMED" | "FAILED",
+    status: "CONFIRMED" | "FAILED",
     confirmedAt?: Date
   ): Promise<void> {
-    try {
-      const query = `
-        UPDATE transactions 
-        SET status = $1, confirmed_at = $2, updated_at = NOW()
-        WHERE tx_hash = $3
-      `;
-
-      await db.query(query, [status, confirmedAt || new Date(), txHash]);
-      console.log(`✅ Transaction ${txHash} status updated to ${status}`);
-    } catch (error) {
-      console.error(`❌ Failed to update transaction status:`, error.message);
-      throw error;
-    }
+    const query = `UPDATE transactions SET status = $1, confirmed_at = $2, updated_at = NOW() WHERE tx_hash = $3`;
+    await db.query(query, [status, confirmedAt || new Date(), txHash]);
   }
 
   // Get transaction by hash
