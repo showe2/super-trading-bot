@@ -191,57 +191,142 @@ class SuperBotAPI {
     try {
       console.log(`🔍 Checking transaction status for: ${txHash}`);
 
-      const response = await fetch(this.rpcUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "getTransaction",
-          params: [
-            txHash,
-            {
-              encoding: "json",
-              commitment: "confirmed",
-              maxSupportedTransactionVersion: 0, // ← Add this line
-            },
-          ],
-        }),
-      });
-
-      const data = await response.json();
-
-      if (data.error) {
-        console.log(`❌ RPC Error: ${data.error.message}`);
+      // Handle Jito bundle IDs (keep existing logic)
+      if (txHash.startsWith("JITO_BUNDLE_")) {
+        const bundleId = txHash.replace("JITO_BUNDLE_", "");
+        console.log(`📦 Checking Jito bundle: ${bundleId}`);
         return {
           tx_hash: txHash,
-          confirmed: false,
-          error: data.error.message,
+          confirmed: true, // Assume confirmed for bundles
+          slot: null,
+          meta: { bundleId, type: "jito_bundle" },
         };
       }
 
-      if (!data.result) {
-        console.log(`❌ No result found for transaction: ${txHash}`);
+      // Use Solana connection instead of raw fetch for better reliability
+      console.log(`🔗 Using RPC: ${this.rpcUrl}`);
+
+      try {
+        // First try getSignatureStatus (faster)
+        const signatureStatus = await this.connection.getSignatureStatus(
+          txHash,
+          {
+            searchTransactionHistory: true,
+          }
+        );
+
+        if (signatureStatus.value) {
+          const status = signatureStatus.value;
+
+          if (status.err) {
+            return {
+              tx_hash: txHash,
+              confirmed: false,
+              error: `Transaction failed: ${JSON.stringify(status.err)}`,
+            };
+          }
+
+          const isConfirmed =
+            status.confirmationStatus === "confirmed" ||
+            status.confirmationStatus === "finalized";
+
+          if (isConfirmed) {
+            // Get full transaction details if confirmed
+            try {
+              const txDetails = await this.connection.getTransaction(txHash, {
+                commitment: "confirmed",
+                maxSupportedTransactionVersion: 0,
+              });
+
+              return {
+                tx_hash: txHash,
+                confirmed: true,
+                slot: txDetails?.slot || status.slot || null,
+                meta: {
+                  confirmationStatus: status.confirmationStatus,
+                  slot: status.slot,
+                  details: txDetails?.meta,
+                },
+              };
+            } catch (detailsError) {
+              console.log(
+                `⚠️ Could not get transaction details: ${detailsError.message}`
+              );
+
+              return {
+                tx_hash: txHash,
+                confirmed: true,
+                slot: status.slot || null,
+                meta: { confirmationStatus: status.confirmationStatus },
+              };
+            }
+          }
+        }
+
+        // If not found or not confirmed
         return {
           tx_hash: txHash,
           confirmed: false,
           error: "Transaction not found or not yet confirmed",
         };
+      } catch (connectionError) {
+        console.log(`⚠️ Connection method failed: ${connectionError.message}`);
+
+        // Fallback to raw RPC call
+        console.log(`🔄 Falling back to raw RPC call...`);
+
+        const response = await fetch(this.rpcUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getTransaction",
+            params: [
+              txHash,
+              {
+                encoding: "json",
+                commitment: "confirmed",
+                maxSupportedTransactionVersion: 0,
+              },
+            ],
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(
+            `RPC request failed: ${response.status} ${response.statusText}`
+          );
+        }
+
+        const data = await response.json();
+        console.log(`📥 RPC response:`, data);
+
+        if (data.error) {
+          return {
+            tx_hash: txHash,
+            confirmed: false,
+            error: `RPC Error: ${data.error.message}`,
+          };
+        }
+
+        if (!data.result) {
+          return {
+            tx_hash: txHash,
+            confirmed: false,
+            error: "Transaction not found or not yet confirmed",
+          };
+        }
+
+        return {
+          tx_hash: txHash,
+          confirmed: !!data.result.slot,
+          slot: data.result.slot || null,
+          meta: data.result.meta,
+        };
       }
-
-      const isConfirmed = !!data.result.slot;
-      console.log(
-        `✅ Transaction status: confirmed=${isConfirmed}, slot=${data.result.slot}`
-      );
-
-      return {
-        tx_hash: txHash,
-        confirmed: isConfirmed,
-        slot: data.result.slot || null,
-        meta: data.result.meta,
-      };
     } catch (error) {
-      console.error(`❌ Error checking transaction status:`, error);
+      console.error(`❌ checkTxStatus error:`, error);
       return {
         tx_hash: txHash,
         confirmed: false,
@@ -1077,6 +1162,17 @@ class SuperBotAPI {
   getLogger() {
     return this.logger;
   }
+
+  // Get transaction history
+  async getHistory(): Promise<ApiResponse> {
+    try {
+      const result = await transactionRepo.getRecent(20);
+      return { success: true, data: result };
+    } catch (error) {
+      this.logger.logError("GET_HISTORY", error.message);
+      return { success: false, error: error.message };
+    }
+  }
 }
 
 // Helper functions
@@ -1110,68 +1206,6 @@ function getClientIP(req: http.IncomingMessage): string {
     req.connection.remoteAddress ||
     "unknown"
   );
-}
-
-function calculatePriceImpact(
-  solReserve: number,
-  tokenReserve: number,
-  solAmountIn: number
-): number {
-  // Constant Product Formula: x * y = k
-  // Where x = SOL reserve, y = token reserve
-
-  const k = solReserve * tokenReserve; // Constant product
-
-  // After adding SOL, new reserves:
-  const newSolReserve = solReserve + solAmountIn;
-  const newTokenReserve = k / newSolReserve;
-
-  // Tokens you get:
-  const tokensOut = tokenReserve - newTokenReserve;
-
-  // Price before trade:
-  const priceBefore = solReserve / tokenReserve;
-
-  // Price after trade (for remaining tokens):
-  const priceAfter = newSolReserve / newTokenReserve;
-
-  // Price impact percentage:
-  const priceImpact = ((priceAfter - priceBefore) / priceBefore) * 100;
-
-  console.log(`💥 Calculated price impact: ${priceImpact.toFixed(2)}%`);
-  return priceImpact;
-}
-
-async function getPriceImpactFromJupiter(
-  tokenMint: string,
-  solAmount: number
-): Promise<number> {
-  try {
-    const lamports = Math.floor(solAmount * 1e9); // Convert SOL to lamports
-
-    const response = await fetch(
-      `https://quote-api.jup.ag/v6/quote?` +
-        `inputMint=So11111111111111111111111111111111111111112&` + // SOL mint
-        `outputMint=${tokenMint}&` +
-        `amount=${lamports}&` +
-        `slippageBps=50`
-    );
-
-    if (!response.ok) {
-      throw new Error(`Jupiter API failed: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-
-    // Jupiter returns price impact as string percentage
-    const priceImpact = parseFloat(data.priceImpactPct || "0");
-
-    console.log(`💥 Price impact for ${solAmount} SOL: ${priceImpact}%`);
-    return priceImpact;
-  } catch (error) {
-    console.error("Failed to get price impact from Jupiter:", error);
-    return 0; // Return 0 if can't calculate
-  }
 }
 
 // Main server
@@ -1258,6 +1292,11 @@ const server = http.createServer(async (req, res) => {
       const type = (urlParams.searchParams.get("type") as any) || "trades";
       const lines = parseInt(urlParams.searchParams.get("lines") || "100");
       result = await api.getLogs(type, lines);
+    }
+
+    // Get transaction history
+    else if (method === "GET" && url === "/api/history") {
+      result = await api.getHistory();
     }
 
     // 404

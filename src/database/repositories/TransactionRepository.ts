@@ -81,6 +81,23 @@ export class TransactionRepository {
       throw error;
     }
   }
+
+  // Get recent transactions
+  async getRecent(limit: number = 20): Promise<any[]> {
+    try {
+      const query = `
+        SELECT * FROM transactions 
+        ORDER BY created_at DESC 
+        LIMIT $1
+      `;
+
+      const result = await db.query(query, [limit]);
+      return result.rows;
+    } catch (error) {
+      console.error(`❌ Failed to get recent transactions:`, error.message);
+      throw error;
+    }
+  }
 }
 
 export const transactionRepo = new TransactionRepository();
