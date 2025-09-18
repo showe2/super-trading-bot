@@ -30,7 +30,6 @@ export interface TransactionEntity {
 
   // Results
   price_impact_percent?: number; // Actual price impact
-  gas_used?: number; // Gas fees paid
   total_cost?: number; // Total cost in SOL
 
   // Timestamps
@@ -45,28 +44,22 @@ export interface OnChainData {
   // Basic price data
   currentPriceUSD: number;
   priceChange24h?: number;
-  priceChange1h?: number;
 
   // Liquidity metrics
   liquidityUSD: number;
-  liquiditySOL?: number;
-  liquidityToken?: number;
 
   // Market cap
   marketCapUSD?: number;
-  fullyDilutedMarketCap?: number;
 
   // Volume metrics
   volume24h: number;
   volume1h?: number;
   volume5min?: number;
-  volumeChange24h?: number;
 
   // Trading activity
   txCount24h?: number;
   txCount1h?: number;
   txCount5min?: number;
-  uniqueWallets24h?: number;
 
   // Pool/DEX data
   poolExists: boolean;

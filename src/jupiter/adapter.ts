@@ -8,7 +8,7 @@ export async function jupiter_buy(
   priorityFee?: number
 ): Promise<{ txid: string; price?: number }> {
   try {
-    console.log(`🚀 REAL Jupiter buy: ${solAmount} SOL for ${tokenMint}`);
+    console.log(`🚀 Jupiter buy: ${solAmount} SOL for ${tokenMint}`);
 
     // 1. Setup wallet and connection
     const privateKey = process.env.WALLET_SECRET;
@@ -23,23 +23,20 @@ export async function jupiter_buy(
 
     // 2. Get Jupiter quote
     const amountInLamports = Math.floor(solAmount * 1e9); // Convert SOL to lamports
-    const slippageBps_converted = slippageBps
-      ? Math.floor(slippageBps * 100)
-      : 150;
 
     const quoteUrl =
       `https://quote-api.jup.ag/v6/quote?` +
       `inputMint=So11111111111111111111111111111111111111112&` +
       `outputMint=${tokenMint}&` +
       `amount=${amountInLamports}&` +
-      `slippageBps=${slippageBps_converted}`;
+      `slippageBps=${slippageBps}`;
 
     console.log("🌐 Jupiter quote URL:", quoteUrl);
     console.log("📊 Request params:");
     console.log("  - Token mint:", tokenMint);
     console.log("  - SOL amount:", solAmount);
     console.log("  - Lamports:", amountInLamports);
-    console.log("  - Slippage:", slippageBps_converted);
+    console.log("  - Slippage:", slippageBps);
 
     console.log(`📊 Getting quote from Jupiter...`);
     const quoteResponse = await fetch(quoteUrl);
@@ -145,7 +142,7 @@ export async function jupiter_sell(
   amountTokens: number
 ): Promise<{ txid: string; solReceived?: number }> {
   try {
-    console.log(`💰 REAL Jupiter sell: ${amountTokens} tokens of ${tokenMint}`);
+    console.log(`💰 Jupiter sell: ${amountTokens} tokens of ${tokenMint}`);
 
     // 1. Setup wallet and connection
     const privateKey = process.env.WALLET_SECRET;
